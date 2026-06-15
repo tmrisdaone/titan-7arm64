@@ -16,7 +16,7 @@ Phone-brain bipedal robot running on Termux + Shizuku + Ollama 0.5B + ESP32.
 [12× MG996R servos]  →  Bipedal legs, arms
 ```
 
-The phone runs everything high-level: sensor fusion, LLM intent (Qwen2.5:0.5B via Ollama), UDP commands to the ESP32. The ESP32 does the real-time low-level control so the robot doesn't eat dust if the LLM takes 100ms.
+The phone runs everything high-level: sensor fusion, LLM intent (Qwen2.5:0.5B via Ollama), serial commands to the ESP32. The ESP32 does the real-time low-level control so the robot doesn't eat dust if the LLM takes 100ms.
 
 ---
 
@@ -25,9 +25,9 @@ The phone runs everything high-level: sensor fusion, LLM intent (Qwen2.5:0.5B vi
 | Component | Qty | Est. Price | Notes |
 |-----------|-----|-----------|-------|
 | ESP32 DEVKIT V1 | 1 | $6 | Main MCU |
-| MG996R metal-gear servo | 12 | $3.50 ea | 6 per leg (hip/thigh/knee/ankle), 6 for arms/torso |
+| MG996R metal-gear servo | 12 | $3.50 ea | 6 per leg × 2 legs (no arms in v1; 6-DOF per leg uses all 12) |
 | 3S LiPo 11.1V 2200mAh | 1 | $12 | Robot power |
-| UBEC 5V 5A step-down | 1 | $4 | Powers the ESP32 + servos cleanly |
+| UBEC 5V 20A step-down | 1 | $12 | Powers all 12 servos + ESP32 (peak 15A stall) |
 | PCA9685 16ch servo driver | 1 | $4 | Lets ESP32 control 12 servos over I2C instead of burning every GPIO |
 | MPU6050 IMU | 1 | $2 | Backup per-robot IMU on the robot body itself |
 | USB OTG cable | 1 | $2 | Phone to ESP32 serial link |
@@ -35,15 +35,16 @@ The phone runs everything high-level: sensor fusion, LLM intent (Qwen2.5:0.5B vi
 | Jumper wires + breadboard | assorted | $5 | Wiring glue |
 | **Total** | | **~$112–122** | Assuming you already own a phone |
 
-### Dimensions (rough, 170cm tall bot prototype)
+### Dimensions (40cm tabletop prototype)
 
 - **Footprint:** 25cm(width) × 35cm(length)
-- **Hip height:** ~90cm from ground
-- **Thigh:** 18cm
-- **Shin:** 16cm
-- **Total leg travel:** ~34cm (fully extended)
+- **Hip height:** ~20cm from ground
+- **Thigh:** 15cm
+- **Shin:** 15cm
+- **Total leg travel:** ~30cm (fully extended)
 - **Torso mass:** ~600g (ESP32 + battery + driver boards)
-- **Servo torque each:** ~11kg/cm @ 6V → 12 servos gives chain-torque reserve
+- **Total robot mass:** ~2.5kg target
+- **Servo torque each:** ~11kg·cm @ 6V (MG996R)
 
 ---
 
@@ -89,11 +90,11 @@ Polling format:
 Yes, you can absolutely run a 0.5B model on the same phone. The model is high-level intent only — it does NOT do per-frame control.
 
 - Pull: `ollama pull qwen2.5:0.5b`
-- `brain/main.py` sends a prompt every 200ms: `"orientation: pitch=2.1 roll=0.3 left_hip_load=0.8. Decide: step_forward | adjust_balance | stop"`
+- `brain/main.py` sends a prompt every 1–2 seconds: `"orientation: pitch=2.1 roll=0.3 left_hip_load=0.8. Return JSON: {\"action\": \"step_forward|lean_left|hold\", \"confidence\": 0.0-1.0}"`
 - The model returns one of three actions. Python interprets it into motor targets.
-- Latency budget: model inference takes ~80–150ms on mid-range Snapdragon; Python PID runs at 50Hz on the ESP32 so it isn't blocked.
-
-Good news: Ollama on Android automatically offloads tensor work to the **NNAPI / GPU / NPU** if Shizuku gives it access. More on that in GPU section below.
+- LLM latency: ~80–150ms on mid-range Snapdragon, but prompt interval is 1–2s to avoid queue backlog and thermal throttling.
+- Per-frame balance (50Hz PID on ESP32 + 10Hz Python state machine) is handled locally, NOT by the LLM.
+- Good news: Ollama on Android automatically offloads tensor work to the **NNAPI / GPU / NPU** if Shizuku gives it access.
 
 ---
 
@@ -123,7 +124,7 @@ python3 brain/main.py
 ## Wiring Diagram
 
 ```
-Phone (USB OTG) → ESP32 UART2 (GPIO16=RX, GPIO17=TX) @ 115200 baud
+Phone (USB OTG) → ESP32 UART2 (GPIO16=RX, GPIO17=TX) @ 115200 baud [Serial]
 
 ESP32 I2C → PCA9685 @ 0x40
   PCA9685 channels 0-11 → MG996R signal wires
@@ -161,63 +162,22 @@ titan-7arm64/
 
 ---
 
+## Cleaned-Up Spec Summary (v1)
+
+| Spec | Value |
+|------|-------|
+| **Scale** | 400mm (tabletop), 2.5kg target |
+| **Legs** | 2 × 6-DOF (12 MG996R servos total) |
+| **Arms** | None (v1 — all servos on legs) |
+| **Pelvis** | Active roll (CoM shift) + yaw (turn) |
+| **Servo bus** | PCA9685 16ch I2C (0x40) |
+| **Power** | 3S LiPo 11.1V → UBEC 5V/20A (15A peak stall) |
+| **Link** | USB OTG serial @ 115200 baud |
+| **Phone** | Termux + Shizuku + termux-api + Ollama |
+| **LLM** | Qwen2.5:0.5B, 1–2s interval, JSON output |
+| **Local control** | ESP32 MicroPython PID @ 50Hz |
+| **Sensors** | Phone IMU (10Hz) + MPU6050 backup |
+
+---
+
 *Built for the dreamers shipping hardware from Termux.*
-
----
-
-# Full Hardware Blueprint (docs/blueprint.md)
-
-## MANDATORY: Shizuku (Not Optional)
-Shizuku lives at https://shizuku.rikka.app. Android aggressively kills background processes and throttles sensor polling to save battery. To achieve 50Hz+ polling rate required for bipedal balance without the phone putting Termux to sleep, you **must** use Shizuku to grant Termux elevated, battery-optimized permissions.
-
-What Shizuku unlocks for TITAN-7:
-- **`termux-sensor` with background wakelock** — keeps the accelerometer/gyro polling alive when the screen sleeps. Without Shizuku, Doze kills your sensors in ~90 seconds and the robot falls over blind.
-- **USB OTG serial without `android.hardware.usb.host` whitelisting** — directly opens `/dev/ttyUSB*` from Python to talk to the ESP32.
-- **`su`-like access via `shizuku` CLI** for direct `/dev` GPU and DRM node access (see GPU section below).
-
-### Install Shizuku
-1. Install the Shizuku app from the Play Store (or F-Droid).
-2. Enable Shizuku via **Settings → Developer options → Wireless debugging** (or via ADB on first launch: `adb shell sh /sdcard/Android/data/moe.shizuku.rikka.api/start.sh`).
-3. Verify: `shizuku --status` should say `running`.
-4. Once Shizuku is up, Termux inherits the elevated permission space.
-
----
-
-## Future: Termux + X11 + GPU via Shizuku
-Shizuku unlocks `/dev/dri/*` and `/dev/graphics/*` DRM nodes that are normally hidden from userland. This lets X11 render hardware-accelerated desktops directly on your phone’s GPU (Mali/Adreno) without needing root. **See `scripts/gpu_x11_shizuku.sh` for the one-click launcher.**
-
-Warnings:
-- Raw DRM access bypasses Android’s display compositor. Use at your own risk.
-- High GPU usage drains battery fast.
-- Only tested on Snapdragon/MediaTek Mali/Adreno devices.
-
----
-
-## BOM (Bill of Materials)
-| Component | Qty | Est. Price | Purpose |
-|-----------|-----|-----------|---------|
-| ESP32 Dev Board (WROOM-32) | 1 | $6 | Low-latency motor controller & serial bridge |
-| MG996R Metal-Gear Servos | 12 | $60 ($5/ea) | Heavy-duty joint actuation (6 per leg) |
-| 3S LiPo Battery (11.1V, 2200mAh) | 1 | $20 | Main power for all 12 servos |
-| UBEC (5V 5A) | 1 | $8 | Steps 11.1V down to safe 5V for ESP32 & logic |
-| USB OTG Adapter | 1 | $3 | Connects phone to ESP32 via serial |
-| 3D Printed Chassis | 1 | $24 | Structural frame |
-| **Total** | | **~$121** | Assuming you already own a phone |
-
----
-
-## Wiring Guide
-1. **Power**: LiPo (+) → UBEC (+IN), LiPo (-) → UBEC (-IN).
-2. **Servo Power**: All 12 servo VCC → UBEC (+OUT), all servo GND → UBEC (-OUT). *DO NOT power servos from the ESP32.*
-3. **Logic Power**: UBEC (+OUT) → ESP32 VIN, UBEC (-OUT) → ESP32 GND.
-4. **Signal**: ESP32 GPIO pins (e.g., 12-17 for Left Leg, 18-23 for Right Leg) → Servo PWM signal wires.
-5. **Comm**: ESP32 TX/RX → Phone via USB OTG (Serial).
-
----
-
-## Kinematics / Dimensions
-- **Leg Configuration**: 6-DOF per leg (Hip Yaw, Hip Roll, Hip Pitch, Knee Pitch, Ankle Pitch, Ankle Roll).
-- **Thigh Length**: ~150mm
-- **Shin Length**: ~150mm
-- **Total Height**: ~400mm (standing)
-- **Weight Target**: < 2.5kg (to stay within MG996R torque limits)
