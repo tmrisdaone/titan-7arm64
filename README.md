@@ -48,6 +48,14 @@ Phone-brain bipedal robot. Runs on arm64 Android through Termux + Shizuku. The p
 
 **Estimated build cost:** ~$118–130
 
+## Hardware & Assembly
+
+![TITAN-7 ARM64 Assembly Diagram](assets/titan764-assembly.png)
+
+![TITAN-7 ARM64 Leg Assembly](assets/titan764-leg-assembly.png)
+
+![TITAN-7 ARM64 Arm Assembly](assets/titan764-arm-assembly.png)
+
 ## Wiring
 
 ```
